@@ -6,7 +6,7 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
 . .github/tests/lib.sh
 
 # --- 1. 必要檔案 ---
-for f in README.md Makefile .gitattributes; do assert_file "$f"; done
+for f in README.md Makefile .gitattributes AGENTS.md CLAUDE.md; do assert_file "$f"; done
 
 # --- 2. 禁止提交的檔案 ---
 BANNED=$(git ls-files | grep -Ei '(^|/)(\.env|id_rsa|.*\.pem)$|\.solution\.|LAB[0-9]+-SOLUTION\.md' || true)

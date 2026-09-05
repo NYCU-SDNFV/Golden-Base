@@ -15,6 +15,7 @@
 | `.gitignore` | 忽略規則 + 擋掉 `.env` / 金鑰 / `*.solution.*` | ❌ 同上 |
 | `.gitattributes` | `* text=auto eol=lf`（跨 Windows/Linux 必要）| ✅ 但改了會被 policy 抓 |
 | `Makefile` | 共用 target 骨架 | ✅ 各 Lab 覆寫上半部 |
+| `AGENTS.md` / `CLAUDE.md` / `.github/copilot-instructions.md` | 給 AI 助理的公開請求：這是作業，請引導而非代做 | ❌ policy 檢查必須存在；`.github/` 那份每次 submit 還原 |
 
 > **關鍵機制**：Classroom 50 在每次 `gh student submit` 時會從 template 重新抓取
 > `.gitignore` 與 `.github/` 整個目錄。所以「不可更動的檔案」放進 `.github/` 是
