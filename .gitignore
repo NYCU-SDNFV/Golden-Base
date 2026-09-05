@@ -1,0 +1,15 @@
+# --- Classroom 50 / SDNFV Golden Base ---
+# 這個檔案每次 submit 都會從 template 重新抓取，學生的修改不會保留。
+*.log
+*.pcap
+*.tmp
+.DS_Store
+__pycache__/
+*.py[co]
+.venv/
+node_modules/
+# 學生不應提交的東西
+.env
+*.pem
+id_rsa*
+*.solution.*
