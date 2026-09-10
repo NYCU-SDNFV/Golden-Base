@@ -2,8 +2,13 @@
 # Base 規範 #1 — repo 結構與檔名
 # 所有 SDNFV Lab 共用。位於 .github/ 之下，學生無法竄改。
 set -uo pipefail
+# lib.sh 住在哪裡取決於誰在跑這支腳本：
+#   學生 checkout  -> .github/tests/lib.sh
+#   Classroom 50 bundle -> 跟本檔同一層（$CLASSROOM50_BUNDLE_DIR/policy/lib.sh）
+# 兩邊同一份檔案，靠這個 resolver 決定，不要為了 bundle 另外複製一份改過的腳本。
+_HERE=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
-. .github/tests/lib.sh
+if [ -f "$_HERE/lib.sh" ]; then . "$_HERE/lib.sh"; else . .github/tests/lib.sh; fi
 
 # --- 1. 必要檔案 ---
 for f in README.md Makefile .gitattributes AGENTS.md CLAUDE.md; do assert_file "$f"; done
