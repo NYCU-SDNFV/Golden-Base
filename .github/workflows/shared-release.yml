@@ -1,0 +1,159 @@
+name: shared Golden release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing private source tag to publish
+        required: true
+        type: string
+      toolkit_ref:
+        description: Full Golden-Base commit SHA containing this workflow
+        required: true
+        type: string
+      auth_mode:
+        description: token or app
+        required: false
+        default: token
+        type: string
+      app_id:
+        description: GitHub App ID when auth_mode is app
+        required: false
+        default: ""
+        type: string
+    secrets:
+      release_token:
+        required: false
+      app_private_key:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: golden-classroom50-publisher
+      cancel-in-progress: false
+    steps:
+      - name: Validate trusted invocation
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TOOLKIT_REF: ${{ inputs.toolkit_ref }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
+          APP_ID: ${{ inputs.app_id }}
+        run: |
+          set -euo pipefail
+          [[ "$TOOLKIT_REF" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "toolkit_ref must be a full lowercase commit SHA" >&2; exit 1; }
+          [[ -n "$RELEASE_TAG" && "$RELEASE_TAG" != *$'\n'* ]] ||
+            { echo "tag must be a nonempty single line" >&2; exit 1; }
+          case "$AUTH_MODE" in
+            token)
+              [[ -z "$APP_ID" ]] ||
+                { echo "app_id is only valid in app mode" >&2; exit 1; }
+              ;;
+            app)
+              [[ "$APP_ID" =~ ^[0-9]+$ ]] ||
+                { echo "app mode requires a numeric app_id" >&2; exit 1; }
+              ;;
+            *)
+              echo "auth_mode must be token or app" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Check out exact caller source tag
+        uses: actions/checkout@v4
+        with:
+          path: source
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted common publisher
+        uses: actions/checkout@v4
+        with:
+          repository: NYCU-SDNFV/Golden-Base
+          path: toolkit
+          ref: ${{ inputs.toolkit_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Create ephemeral GitHub App token
+        id: app-token
+        if: inputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: NYCU-SDNFV
+          permission-administration: write
+          permission-contents: write
+
+      - name: Publish with organization token
+        if: inputs.auth_mode == 'token'
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ secrets.release_token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "${RELEASE_TOKEN:-}" ]] ||
+            { echo "token mode requires release_token" >&2; exit 1; }
+          python3 toolkit/tools/release/release.py \
+            --source source \
+            --tag "$RELEASE_TAG" \
+            --report "$RUNNER_TEMP/golden-release-report.json"
+
+      - name: Publish with ephemeral App token
+        if: inputs.auth_mode == 'app'
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "${RELEASE_TOKEN:-}" ]] ||
+            { echo "GitHub App token creation failed" >&2; exit 1; }
+          python3 toolkit/tools/release/release.py \
+            --source source \
+            --tag "$RELEASE_TAG" \
+            --report "$RUNNER_TEMP/golden-release-report.json"
+
+      - name: Ensure a failure report exists
+        if: always()
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! -f "$RUNNER_TEMP/golden-release-report.json" ]]; then
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path(os.environ["RUNNER_TEMP"], "golden-release-report.json").write_text(
+              json.dumps({
+                  "status": "workflow-failed",
+                  "tag": os.environ.get("RELEASE_TAG", ""),
+                  "error": "The workflow failed before the trusted publisher produced a report.",
+              }, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
+
+      - name: Preserve release report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-release-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/golden-release-report.json
+          if-no-files-found: warn
+          retention-days: 30

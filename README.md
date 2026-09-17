@@ -1,5 +1,53 @@
 # SDNFV Golden Base
 
+## Shared Golden publication
+
+Golden-Base also owns the versioned common publisher and reusable release
+workflow. See [the release guide](tools/release/README.md).
+
+Each private `Golden-<Name>` keeps its Lab source, canonical grader and release
+configuration. Its thin caller runs the Lab-specific PoC, then invokes the
+shared publisher at a pinned Golden-Base commit. Do not copy the publisher for
+each new Lab.
+
+The publication credential is an organization secret restricted to **selected
+instructor repositories**, never `all` or `private`: student repositories are
+private too. The shared workflow supports a scoped-token backend and a GitHub
+App backend. Active token deployments rotate one central credential, not one
+credential per Lab. The GitHub App backend can replace it without changing Lab
+code.
+
+Use [golden-bootstrap.py](tools/golden-bootstrap.py) from a local administrator
+session (`GOLDEN_ADMIN_TOKEN`, never committed or placed in a student workflow):
+
+```sh
+python3 tools/golden-bootstrap.py --name VRouter \
+  --source /path/to/Golden-VRouter --toolkit-ref FULL_TESTED_GOLDEN_BASE_SHA \
+  --poc-workflow poc-lab3.yml --replace-workflow
+```
+
+The default is a read-only plan. Add `--apply` after reviewing it. Bootstrap
+creates the private repository if needed, verifies the instructor-only access
+boundary, grants the instructors team, enrolls the repository ID in the existing
+org secret and generates the pinned caller. It does not commit or push Lab
+code. New Labs can supply `--slug`, `--title`, `--description` and `--semester`
+to generate their release configuration.
+
+After normal code review/commit, publishing remains an immutable tag push:
+
+```sh
+git tag newbie-v0.1.0
+git push origin newbie-v0.1.0
+```
+
+Automatic student update PRs are a separate explicit policy. A credential
+without Pull requests permission uses `student_updates: manual`: templates and
+canonical grading still update, while students run the existing `make update`.
+Do not silently swallow a failed PR request or grant broader access to student
+repositories merely to make publication green.
+
+## Original Base template contract
+
 > 這是 **Base Template**，不是可以直接發給學生的 Lab。
 > 每個 Lab 的 Golden Repo 都從這個 template generate 出來，然後覆寫 `README.md`、
 > `Makefile` 的 build/up/down/shell/logs/clean，並補上 `.github/tests/run.sh`。

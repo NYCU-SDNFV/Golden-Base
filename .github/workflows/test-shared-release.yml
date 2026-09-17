@@ -1,0 +1,35 @@
+name: test shared Golden release
+
+on:
+  pull_request:
+    paths:
+      - "tools/release/**"
+      - "tools/golden-bootstrap.py"
+      - "tests/test_golden_bootstrap.py"
+      - ".github/workflows/shared-release.yml"
+      - ".github/workflows/test-shared-release.yml"
+  push:
+    branches: [main, master]
+    paths:
+      - "tools/release/**"
+      - "tools/golden-bootstrap.py"
+      - "tests/test_golden_bootstrap.py"
+      - ".github/workflows/shared-release.yml"
+      - ".github/workflows/test-shared-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run offline shared release regressions
+        run: |
+          python3 -m unittest discover -s tools/release/tests -p "test_*.py" -v
+          python3 -m unittest discover -s tests -p "test_golden_bootstrap.py"
