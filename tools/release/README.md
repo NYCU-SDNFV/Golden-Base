@@ -2,7 +2,7 @@
 
 This directory is the trusted release implementation for all Golden labs. A
 private source repository supplies only its tagged content, release routing,
-canonical grader, rubric, tests, and student update asset. The publisher never
+environment profile, rubric, tests, and student update asset. The publisher never
 executes source-provided release, strip, bundle, grader, policy, or upgrade
 code.
 
@@ -59,11 +59,60 @@ credential is intentionally limited to Contents and Administration publication
 operations; the publisher does not call Pull requests or Actions APIs. Manual
 mode is never a fallback after an API failure.
 
-The canonical rubric at `.github/grade/tests.json` may contain any positive
-number of uniquely named run tests; integer points must total exactly 100.
+The canonical rubric at `.github/grade/tests.json` must contain the number of
+uniquely named checks declared by the profile, including zero-point checks;
+integer points must total exactly 100.
 Protected student bytes are defined by
 `.github/policy/manifest.sha256`. Executable modes come from the tagged Git
-index, not the runner filesystem.
+index, not the runner filesystem. Toolkit-generated runtime files use explicit
+`100644` modes, independent of the source filesystem.
+
+## Runtime contract
+
+The protected `.github/golden/profile.json` is data, not a hook that executes
+source code:
+
+```json
+{
+  "schema": 1,
+  "name": "Toolchain",
+  "lab": 0,
+  "assignment": "lab0-toolchain",
+  "checks": 8,
+  "environment": "toolchain"
+}
+```
+
+The profile selects capabilities, not a grading implementation. The Lab retains
+its rubric, exercises, topology and report/evidence checks. All Labs use the
+same release/integrity gate, bounded command execution, result format and
+host-preparation boundary. Old immutable releases retain their original toolkit.
+
+Use `python3 -B tools/runtime/sync.py --source SOURCE --write` from a clean,
+tested toolkit checkout to generate source runtime assets and their manifest
+entries. Stage them, then rerun without `--write` to verify. The caller's
+`uses`, `toolkit_ref`, and generated `runtime.json` must identify that same
+commit. `runtime.json` also records each distributed implementation's hash.
+Missing, edited, untracked, or unprotected runtime files stop publication.
+
+The Dockerfile must use the exact image digest from the runtime contract, and
+the protected Makefile must expose this independent, non-scoring command:
+
+```make
+pretest:
+	@python3 -B .github/golden/pretest.py
+```
+
+Trusted stripping replaces public runtime assets with the pinned implementation.
+The canonical builder likewise injects the common adapter and grading code,
+never a Lab-provided replacement. Student snapshots do not include the grader.
+Both outputs carry the same protected profile and runtime provenance.
+
+The private PoC must construct its bundle with this shared builder. Unit tests
+must not prepare the runner host; only the real canonical grading step does so.
+Host preparation or verification failure is an infrastructure error before
+student scoring, whereas an outdated or modified protected contract still
+scores zero with the manual-update instructions.
 
 ## CLI
 

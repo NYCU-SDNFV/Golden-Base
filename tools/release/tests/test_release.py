@@ -26,6 +26,7 @@ def load_module(name):
 RELEASE = load_module("release")
 STRIP = load_module("strip")
 BUNDLE = load_module("bundle")
+RUNTIME = RELEASE.helper("runtime").helper()
 
 
 def git(repo, *args, check=True):
@@ -210,15 +211,12 @@ class RoutingTests(TempCase):
             ROOT / ".github/workflows/test-shared-release.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            'python3 -m unittest discover -s tools/release/tests '
-            '-p "test_*.py" -v',
+            'python3 -B -m unittest tools.release.tests.test_release',
             workflow,
         )
-        self.assertIn(
-            'python3 -m unittest discover -s tests '
-            '-p "test_golden_bootstrap.py"',
-            workflow,
-        )
+        for suite in ("bootstrap", "runtime", "environment", "grading"):
+            self.assertIn(f"tests.test_golden_{suite}", workflow)
+        self.assertEqual(2, workflow.count('"tools/runtime/**"'))
 
 
 class RepositoryChecks(TempCase):
@@ -366,6 +364,18 @@ class SanitizationAndBundleTests(TempCase):
             "visible\n# KEY instructor secret\n#STUDENT: student task\n")
         put(source, "solution.txt", "hidden\n")
         put(source, ".studentignore", "solution.txt\n")
+        put(source, "Dockerfile", f"FROM {RUNTIME.CONTRACT.COURSE_HOST_IMAGE}\n")
+        put(source, "Makefile", "pretest:\n\t@python3 -B .github/golden/pretest.py\n")
+        RELEASE.write_json(
+            put(source, RUNTIME.PROFILE, ""),
+            {"schema": 1, "name": "VRouter", "lab": 3,
+             "assignment": "lab3-vrouter", "checks": len(points), "environment": "vrouter"},
+        )
+        ref = RUNTIME.toolkit_ref()
+        put(source, ".github/workflows/release.yml",
+            "jobs:\n  publish:\n"
+            "    uses: NYCU-SDNFV/Golden-Base/.github/workflows/shared-release.yml@"
+            + ref + "\n    with:\n      toolkit_ref: " + ref + "\n")
         put(source, "tests/00_env.sh", "#!/bin/sh\nexit 0\n", executable=True)
         put(source, ".github/tests/lib.sh", "#!/bin/sh\ntrue\n", executable=True)
         put(source, ".github/policy/00_layout.sh", "#!/bin/sh\nexit 0\n",
@@ -387,6 +397,7 @@ class SanitizationAndBundleTests(TempCase):
             "raise RuntimeError('untrusted release code')\n")
         protected = (
             ".lab-release.json",
+            "Dockerfile", "Makefile",
             ".github/policy/00_layout.sh",
             ".github/policy/01_integrity.sh",
             ".github/policy/integrity.py",
@@ -396,6 +407,7 @@ class SanitizationAndBundleTests(TempCase):
             f"{hashlib.sha256((source / name).read_bytes()).hexdigest()}  {name}\n"
             for name in protected
         ))
+        RUNTIME.synchronize(source)
         commit(source)
         git(source, "update-index", "--chmod=+x", "--",
             "tests/00_env.sh", ".github/tests/lib.sh",

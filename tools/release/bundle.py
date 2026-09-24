@@ -2,6 +2,7 @@
 """Build the canonical grader bundle without executing source-provided code."""
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -10,6 +11,14 @@ import sys
 
 class BundleError(Exception):
     pass
+
+
+def runtime():
+    path = Path(__file__).resolve().parent / "runtime.py"
+    spec = importlib.util.spec_from_file_location("golden_bundle_runtime", path)
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded.helper()
 
 
 def regular(path, label):
@@ -55,13 +64,17 @@ def build(source, student, output):
     output = Path(output).resolve()
     if output.exists():
         raise BundleError("bundle output already exists; choose a fresh path")
+    distribution = runtime()
+    try:
+        distribution.validate(source)
+    except ValueError as exc:
+        raise BundleError(f"invalid shared runtime contract: {exc}") from exc
     tests = student / "tests"
     if not tests.is_dir() or tests.is_symlink():
         raise BundleError("sanitized student tree has no regular tests directory")
     output.mkdir(parents=True)
     shutil.copytree(tests, output / "tests", copy_function=shutil.copy2)
     mapping = {
-        source / ".github/grade/autograder.py": output / "autograder.py",
         source / ".github/grade/tests.json": output / "tests.json",
         student / ".lab-release.json": output / "release.json",
         student / ".github/policy/00_layout.sh": output / "policy/00_layout.sh",
@@ -72,7 +85,12 @@ def build(source, student, output):
     }
     for source_path, target_path in mapping.items():
         copy_file(source_path, target_path)
-    validate_rubric(output / "tests.json")
+    try:
+        profile = distribution.inject_bundle(source, student, output)
+    except ValueError as exc:
+        raise BundleError(f"cannot distribute shared runtime: {exc}") from exc
+    if len(validate_rubric(output / "tests.json")) != profile["checks"]:
+        raise BundleError("canonical rubric count must match the protected runtime profile")
 
 
 def main(argv=None):

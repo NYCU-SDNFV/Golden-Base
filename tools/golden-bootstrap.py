@@ -13,6 +13,12 @@ import sys
 OWNER = "NYCU-SDNFV"
 TEAM = "instructors"
 SECRETS = {"token": "GOLDEN_RELEASE_TOKEN", "app": "GOLDEN_RELEASE_APP_KEY"}
+RUNTIME_SPEC = importlib.util.spec_from_file_location(
+    "golden_bootstrap_runtime",
+    Path(__file__).resolve().parent / "runtime/golden/contract.py",
+)
+RUNTIME = importlib.util.module_from_spec(RUNTIME_SPEC)
+RUNTIME_SPEC.loader.exec_module(RUNTIME)
 
 
 class BootstrapError(ValueError):
@@ -40,9 +46,9 @@ def validate_config(config, name):
         raise BootstrapError("channels must include newbie")
     pairs = set()
     for channel, route in channels.items():
-        if channel != "newbie" and not re.fullmatch(r"[1-9][0-9]{1,3}-[12]", channel):
+        if not re.fullmatch(r"newbie(?:-[1-9][0-9]{1,3}-[12])?|[1-9][0-9]{1,3}-[12]", channel):
             raise BootstrapError("unsupported release channel")
-        classroom = "winlab-newbies" if channel == "newbie" else f"sdnfv-{channel}"
+        classroom = "winlab-newbies" if channel.startswith("newbie") else f"sdnfv-{channel}"
         if (not isinstance(route, dict) or route.get("classroom") != classroom
                 or route.get("template") != f"Golden-{channel}-{name}"
                 or not isinstance(route.get("slug"), str)
@@ -73,6 +79,16 @@ def new_configuration(name, slug, title, description, semester):
     return validate_config(config, name)
 
 
+def new_runtime_profile(name, lab, assignment, checks, environment):
+    try:
+        return RUNTIME.validate_profile({
+            "schema": 1, "name": name, "lab": lab, "assignment": assignment,
+            "checks": checks, "environment": environment,
+        })
+    except ValueError as exc:
+        raise BootstrapError(str(exc)) from exc
+
+
 def render_workflow(toolkit_ref, poc_workflow, auth_mode):
     if not re.fullmatch(r"[0-9a-f]{40}", toolkit_ref):
         raise BootstrapError("toolkit_ref must pin the tested Golden-Base commit")
@@ -90,7 +106,7 @@ def render_workflow(toolkit_ref, poc_workflow, auth_mode):
         "name: release\n"
         "on:\n"
         "  push:\n"
-        "    tags: [\"newbie\", \"[0-9]*-[12]\", \"v*\", \"newbie-v*\", \"[0-9]*-[12]-v*\"]\n"
+        "    tags: [\"newbie\", \"[0-9]*-[12]\", \"v*\", \"newbie-v*\", \"newbie-*-v*\", \"[0-9]*-[12]-v*\"]\n"
         "  workflow_dispatch:\n"
         "    inputs:\n"
         "      tag:\n"
@@ -192,7 +208,7 @@ def enroll(api, name, auth_mode="token", apply=False):
 
 
 def configure(api, source, name, toolkit_ref, poc_workflow, auth_mode,
-              apply=False, replace_workflow=False, new_config=None):
+              apply=False, replace_workflow=False, new_config=None, new_profile=None):
     source = Path(source).resolve()
     validate_name(name)
     if not source.is_dir() or (source / ".lab-local-provenance.json").exists():
@@ -206,6 +222,22 @@ def configure(api, source, name, toolkit_ref, poc_workflow, auth_mode,
     else:
         raise BootstrapError("a Lab-specific .release.json is required before enrollment")
     validate_config(config, name)
+    profile_path = source / ".github/golden/profile.json"
+    try:
+        if profile_path.exists():
+            profile = RUNTIME.load_profile(profile_path)
+            if new_profile is not None and profile != new_profile:
+                raise BootstrapError("existing runtime profile differs; review it before changing the contract")
+        elif new_profile is not None:
+            profile = RUNTIME.validate_profile(new_profile)
+        else:
+            raise BootstrapError(
+                "declare .github/golden/profile.json first, or supply --lab-number, --checks and --environment")
+    except (OSError, ValueError) as exc:
+        raise BootstrapError(f"invalid runtime profile: {exc}") from exc
+    if (profile["name"] != name
+            or profile["assignment"] not in {route["slug"] for route in config["channels"].values()}):
+        raise BootstrapError("runtime profile must identify this source and a configured assignment")
     workflow = render_workflow(toolkit_ref, poc_workflow, auth_mode)
     poc = source / ".github/workflows" / poc_workflow
     if not poc.is_file() or poc.is_symlink():
@@ -214,15 +246,20 @@ def configure(api, source, name, toolkit_ref, poc_workflow, auth_mode,
     if (destination.exists() and destination.read_text(encoding="utf-8") != workflow
             and not replace_workflow):
         raise BootstrapError("release workflow differs; use --replace-workflow after reviewing the migration")
-    if destination.is_symlink() or config_path.is_symlink():
+    if (destination.is_symlink() or config_path.is_symlink()
+            or any(part.is_symlink() for part in (profile_path, *profile_path.parents)
+                   if part == source or source in part.parents)):
         raise BootstrapError("bootstrap will not write through symbolic links")
     plan = enroll(api, name, auth_mode, apply=apply)
     plan.update({"source": str(source), "toolkit_ref": toolkit_ref,
-                 "workflow": str(destination), "student_updates": config["student_updates"]})
+                 "workflow": str(destination), "student_updates": config["student_updates"],
+                 "runtime_profile": profile, "runtime_sync_required": True})
     if apply:
         for path, content in (
                 (config_path, json.dumps(config, indent=2) + "\n"),
-                (destination, workflow)):
+                (destination, workflow),
+                (profile_path, json.dumps(profile, indent=2) + "\n")):
+            path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(path.name + ".bootstrap-tmp")
             temporary.write_text(content, encoding="utf-8", newline="\n")
             temporary.replace(path)
@@ -242,6 +279,9 @@ def main():
     parser.add_argument("--title", help="student-facing title for a new Lab")
     parser.add_argument("--description", help="student-facing description for a new Lab")
     parser.add_argument("--semester", default="115-1")
+    parser.add_argument("--lab-number", type=int, help="Lab number for a new runtime profile")
+    parser.add_argument("--checks", type=int, help="number of canonical rubric checks, including zero-point checks")
+    parser.add_argument("--environment", choices=RUNTIME.ENVIRONMENTS)
     args = parser.parse_args()
     token = os.environ.get("GOLDEN_ADMIN_TOKEN")
     if not token:
@@ -260,9 +300,15 @@ def main():
             if not (args.source / ".release.json").exists():
                 generated = new_configuration(args.name, args.slug, args.title,
                                               args.description, args.semester)
+            profile = None
+            if any(value is not None for value in (args.lab_number, args.checks, args.environment)):
+                if not args.slug:
+                    parser.error("--slug is required when generating a runtime profile")
+                profile = new_runtime_profile(
+                    args.name, args.lab_number, args.slug, args.checks, args.environment)
             result = configure(api, args.source, args.name, args.toolkit_ref,
                                args.poc_workflow, args.auth_mode, args.apply,
-                               args.replace_workflow, generated)
+                               args.replace_workflow, generated, profile)
         else:
             result = enroll(api, args.name, args.auth_mode, args.apply)
     except (BootstrapError, OSError, ValueError, module.ReleaseError) as exc:

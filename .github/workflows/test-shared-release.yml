@@ -4,16 +4,18 @@ on:
   pull_request:
     paths:
       - "tools/release/**"
+      - "tools/runtime/**"
       - "tools/golden-bootstrap.py"
-      - "tests/test_golden_bootstrap.py"
+      - "tests/test_golden_*.py"
       - ".github/workflows/shared-release.yml"
       - ".github/workflows/test-shared-release.yml"
   push:
     branches: [main, master]
     paths:
       - "tools/release/**"
+      - "tools/runtime/**"
       - "tools/golden-bootstrap.py"
-      - "tests/test_golden_bootstrap.py"
+      - "tests/test_golden_*.py"
       - ".github/workflows/shared-release.yml"
       - ".github/workflows/test-shared-release.yml"
   workflow_dispatch:
@@ -31,5 +33,6 @@ jobs:
           persist-credentials: false
       - name: Run offline shared release regressions
         run: |
-          python3 -m unittest discover -s tools/release/tests -p "test_*.py" -v
-          python3 -m unittest discover -s tests -p "test_golden_bootstrap.py"
+          python3 -B -m unittest tools.release.tests.test_release \
+            tests.test_golden_bootstrap tests.test_golden_runtime \
+            tests.test_golden_environment tests.test_golden_grading

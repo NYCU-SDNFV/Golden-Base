@@ -116,6 +116,15 @@ class EnrollmentTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_new_runtime_profile_requires_explicit_lab_capabilities(self):
+        value = BOOTSTRAP.new_runtime_profile("Demo", 9, "lab9-demo", 4, "toolchain")
+        self.assertEqual(4, value["checks"])
+        self.assertEqual("toolchain", value["environment"])
+        for checks, environment in ((None, "toolchain"), (4, None), (True, "toolchain")):
+            with self.subTest(checks=checks, environment=environment), self.assertRaises(
+                    BOOTSTRAP.BootstrapError):
+                BOOTSTRAP.new_runtime_profile("Demo", 9, "lab9-demo", checks, environment)
+
     def test_new_lab_configuration_needs_no_hand_written_release_routes(self):
         config = BOOTSTRAP.new_configuration("Demo", "lab9-demo", "Lab 9", "A new lab", "115-1")
         self.assertEqual("Golden-newbie-Demo", config["channels"]["newbie"]["template"])
@@ -149,6 +158,10 @@ class WorkflowTests(unittest.TestCase):
             (root / ".github/workflows/poc.yml").write_text("name: private verification\n")
             (root / ".github/workflows/release.yml").write_text("old workflow\n")
             (root / ".release.json").write_text(json.dumps(configuration()))
+            profile = root / ".github/golden/profile.json"
+            profile.parent.mkdir()
+            profile.write_text(json.dumps(
+                BOOTSTRAP.new_runtime_profile("Demo", 9, "lab9-demo", 4, "toolchain")))
             api = API()
             with self.assertRaises(BOOTSTRAP.BootstrapError):
                 BOOTSTRAP.configure(api, root, "Demo", "a" * 40, "poc.yml", "token", apply=True)
@@ -158,6 +171,47 @@ class WorkflowTests(unittest.TestCase):
             before = (root / ".github/workflows/release.yml").read_bytes()
             BOOTSTRAP.configure(api, root, "Demo", "a" * 40, "poc.yml", "token", apply=True)
             self.assertEqual(before, (root / ".github/workflows/release.yml").read_bytes())
+
+    def test_missing_or_mismatched_profile_stops_before_secret_enrollment(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / ".github/workflows").mkdir(parents=True)
+            (root / ".github/workflows/poc.yml").write_text("name: private verification\n")
+            (root / ".release.json").write_text(json.dumps(configuration()))
+            api = API()
+            with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "declare"):
+                BOOTSTRAP.configure(api, root, "Demo", "a" * 40, "poc.yml", "token", apply=True)
+            wrong = BOOTSTRAP.new_runtime_profile("Different", 9, "lab9-demo", 4, "toolchain")
+            with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "identify this source"):
+                BOOTSTRAP.configure(api, root, "Demo", "a" * 40, "poc.yml", "token",
+                                    apply=True, new_profile=wrong)
+            self.assertEqual([], api.writes)
+
+    def test_bootstrap_generates_profile_without_running_source_code(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / ".github/workflows").mkdir(parents=True)
+            (root / ".github/workflows/poc.yml").write_text("name: private verification\n")
+            profile = BOOTSTRAP.new_runtime_profile("Demo", 9, "lab9-demo", 4, "toolchain")
+            result = BOOTSTRAP.configure(
+                API(), root, "Demo", "a" * 40, "poc.yml", "token",
+                new_config=configuration(), new_profile=profile)
+            self.assertTrue(result["runtime_sync_required"])
+            self.assertFalse((root / ".github/golden/profile.json").exists())
+            BOOTSTRAP.configure(
+                API(), root, "Demo", "a" * 40, "poc.yml", "token", apply=True,
+                new_config=configuration(), new_profile=profile)
+            self.assertEqual(profile, json.loads(
+                (root / ".github/golden/profile.json").read_text(encoding="utf-8")))
+
+    def test_renumbered_newbie_route_remains_a_newbie_channel(self):
+        value = configuration()
+        value["channels"]["newbie-115-1"] = {
+            "classroom": "winlab-newbies", "slug": "lab8-demo",
+            "template": "Golden-newbie-115-1-Demo",
+        }
+        self.assertEqual(value, BOOTSTRAP.validate_config(value, "Demo"))
+        self.assertIn('"newbie-*-v*"', BOOTSTRAP.render_workflow("a" * 40, "poc.yml", "token"))
 
     def test_wrong_assignment_namespace_is_rejected(self):
         config = configuration()

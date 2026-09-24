@@ -2,7 +2,7 @@
 # 各 Lab 覆寫 build/up/down/lab-test，但 policy / test 兩個 target 不要改。
 SHELL := /usr/bin/env bash
 
-.PHONY: help build up down shell logs clean policy lab-test test
+.PHONY: help build up down shell logs clean policy lab-test test pretest
 
 help:
 	@echo "make build     建置環境"
@@ -11,6 +11,10 @@ help:
 	@echo "make test      跑完整檢查（policy + lab-test）"
 	@echo "make policy    只跑 Base 規範檢查"
 	@echo "make clean     清乾淨"
+	@echo "make pretest   Diagnose the declared runtime without changing host configuration"
+
+pretest:
+	@python3 -B .github/golden/pretest.py
 
 build:      ## 各 Lab 覆寫
 	@echo "(base) 此 Lab 未定義 build"

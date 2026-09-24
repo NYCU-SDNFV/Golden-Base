@@ -460,6 +460,7 @@ def set_index_modes(repo, modes):
 
 
 def bundle_file_modes(bundle, source_modes):
+    managed = helper("runtime").helper().canonical_modes()
     aliases = {
         "autograder.py": ".github/grade/autograder.py",
         "tests.json": ".github/grade/tests.json",
@@ -468,6 +469,9 @@ def bundle_file_modes(bundle, source_modes):
     }
     modes = {}
     for name in tree_hashes(bundle):
+        if name in managed:
+            modes[name] = managed[name]
+            continue
         original = aliases.get(
             name, ".github/" + name if name.startswith("policy/") else name)
         if original not in source_modes:
@@ -791,9 +795,12 @@ def publish(source, tag, token, report, source_repository, pages_timeout=600):
     verify_source_repository(api, source_repository)
     source_sha = verify_source(source, tag, config, environment)
     modes = source_file_modes(source)
+    distribution = helper("runtime").helper()
+    modes.update({name: "100644" for name in distribution.public_paths()})
     metadata = release_metadata(config, tag, source_sha)
     report.update({
         "release": metadata,
+        "runtime_toolkit_ref": distribution.toolkit_ref(),
         "template_published": False,
         "pages_verified": False,
         "student_updates": {"mode": "manual", "policy": MANUAL_POLICY},

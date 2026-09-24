@@ -4,6 +4,7 @@
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ DEFAULT_IGNORE = (
     ".studentignore",
     ".github/workflows/",
     ".github/grade/",
+    ".github/golden/grading.py",
     "tools/student-build/",
     "tools/release/",
     "INSTRUCTOR-*",
@@ -43,6 +45,14 @@ METADATA = ".lab-release.json"
 
 class StripError(Exception):
     pass
+
+
+def runtime():
+    path = Path(__file__).resolve().parent / "runtime.py"
+    spec = importlib.util.spec_from_file_location("golden_strip_runtime", path)
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded.helper()
 
 
 def tracked_files(source):
@@ -187,7 +197,7 @@ def guards(output):
                     failures.append(
                         f"marker leaked: {relative}:{number}: {line.strip()[:80]}"
                     )
-    for name in (".github/workflows", ".github/grade", "tools/release",
+    for name in (".github/workflows", ".github/grade", ".github/golden/grading.py", "tools/release",
                  "tools/student-build"):
         if (root / name).exists():
             failures.append(f"{name}/ must not exist in the student tree")
@@ -199,6 +209,11 @@ def build(source, output, metadata):
     output = Path(output).resolve()
     if output.exists():
         raise StripError("student output already exists; choose a fresh path")
+    distribution = runtime()
+    try:
+        distribution.validate(source)
+    except ValueError as exc:
+        raise StripError(f"invalid shared runtime contract: {exc}") from exc
     output.mkdir(parents=True)
     patterns = load_ignore(source)
     for relative in tracked_files(source):
@@ -218,6 +233,10 @@ def build(source, output, metadata):
         else:
             shutil.copyfile(source_path, target_path)
         shutil.copymode(source_path, target_path)
+    try:
+        distribution.inject_student(source, output)
+    except ValueError as exc:
+        raise StripError(f"cannot distribute shared runtime: {exc}") from exc
     regenerate_manifest(output, source)
     stamp_release(output, metadata)
     failures = guards(output)
